@@ -1407,6 +1407,36 @@ jobs:
           # 形态），导致 android17-6.18 编译报隐式声明；按头文件实际内容打兼容补丁
           bash "$GITHUB_WORKSPACE/scripts/bbg_fixes/fix_blkdev_helper.sh" common
 
+      # ============ BORE v7.0.0 CPU 调度器（6.1 CFS, KABI-safe）============
+      - name: 集成 BORE v7.0.0 CPU 调度器
+        if: inputs.kernel_version == '6.1'
+        working-directory: ${{ env.KERNEL_ROOT }}/common
+        run: |
+          set -euo pipefail
+          BORE_PATCH="$GITHUB_WORKSPACE/patches/bore/bore-v7.0.0.patch"
+          [ -f "$BORE_PATCH" ] || { echo "::error::BORE 补丁缺失: $BORE_PATCH"; exit 1; }
+          echo "=== 应用 BORE v7.0.0 调度补丁 ==="
+          if patch -p1 --dry-run --forward -F 3 < "$BORE_PATCH" >/dev/null 2>&1; then
+            patch -p1 --no-backup-if-mismatch -F 3 < "$BORE_PATCH"
+            echo "[+] BORE v7.0.0 补丁已应用 (fuzz 3)"
+          elif grep -q '^config SCHED_BORE' init/Kconfig; then
+            echo "[*] BORE 补丁此前已应用，跳过"
+          else
+            echo "::error::BORE 补丁应用失败"
+            exit 1
+          fi
+          # 完整性校验
+          [ -f kernel/sched/bore.c ] || { echo "::error::BORE 后缺 kernel/sched/bore.c"; exit 1; }
+          grep -q '^config SCHED_BORE' init/Kconfig || { echo "::error::BORE 后缺 SCHED_BORE 配置"; exit 1; }
+          # defconfig 开关（bazel fragment 捕获）
+          if ! grep -q '^CONFIG_SCHED_BORE=y' "$DEFCONFIG"; then
+            echo "CONFIG_SCHED_BORE=y" >> "$DEFCONFIG"
+            echo "[+] CONFIG_SCHED_BORE=y 已启用"
+          else
+            echo "[*] CONFIG_SCHED_BORE=y 已存在"
+          fi
+          echo "BORE_INTEGRATED=true" >> "$GITHUB_ENV"
+
       - name: 应用网络增强（BBRv3 / IPSet / Qdisc / CIFS）
         if: inputs.use_net_enhance
         working-directory: ${{ env.KERNEL_ROOT }}/common
