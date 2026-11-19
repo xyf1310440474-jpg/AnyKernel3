@@ -1,252 +1,85 @@
-<div align="center">
+# houji-bore-kernel
 
-# GKI KernelSU SUSFS
+> 小米 14（houji / SM8650 / 骁龙 8 Gen 3）专用 GKI 内核
+> 基于小凌洛（LingLuo17/AnyKernel3）构建链，加入 **BORE v7.0.0 CPU 调度器**与 **BakaSU + SUSFS 官方级伪装**。
 
-**Automated GKI Kernel Builds | SukiSU / BakaSU / FinaSU + SUSFS Integration**
-
-[![Release](https://img.shields.io/github/v/release/LingLuo17/AnyKernel3?label=Release&style=flat-square&logo=github&logoColor=white&color=2ea44f)](https://github.com/LingLuo17/AnyKernel3/releases)
-[![Coolapk](https://img.shields.io/badge/Follow-Coolapk-3DDC84?style=flat-square&logo=android&logoColor=white)](http://www.coolapk.com/u/38407386)
-[<img src="https://img.shields.io/badge/Join-QQ%20Group-blue?style=flat-square&logo=github&logoColor=white">](https://qm.qq.com/q/PZIFvlcbqU)
-[![SukiSU](https://img.shields.io/badge/SukiSU-Supported-5AA300?style=flat-square)](https://sukisu.org/)
-[![BakaSU](https://img.shields.io/badge/BakaSU-Supported-5AA300?style=flat-square)](https://bakasu.org/)
-[![FinaSU](https://img.shields.io/badge/FinaSU-Supported-5AA300?style=flat-square)](https://github.com/LyraVoid/FinaSU)
-[![SUSFS](https://img.shields.io/badge/SUSFS-Integrated-E67E22?style=flat-square)](https://gitlab.com/simonpunk/susfs4ksu)
+## 核心特性
 
-**English** | [简体中文](#chinese)
+| 项目 | 说明 |
+|---|---|
+| 内核基线 | Linux 6.1.138 GKI，KMI `android14-11` |
+| 调度器 | **BORE v7.0.0**（Burst-Oriented Response Enhancer，CFS KABI-safe），提升 UI 响应与触控延迟 |
+| Root | BakaSU（KernelSU 变体） |
+| 隐藏 | SUSFS v2.4.0（GKI），内核内置 + BakaSU 管理器内置 SUSFS 管理界面 |
+| 其他基线 | MGLRU、UCLAMP、KSU_SUSFS、FQ qdisc、clang LTO |
+| 不含 | 无第三方用户态调度守护进程，不改 GPU 频率策略（保留系统原生调频） |
 
-</div>
+> **设计原则**：只改调度算法本身（CFS 核心），不与高通 WALT governor、HyperOS 原生 miperf2/perf2-hal/powerkeeper 抢 sysfs 控制权。BORE 决定「哪个任务先跑」，原生调度决定「频率给多少」，两者正交共存。
 
-## 📖 Introduction
+## BORE 调度器
 
-Built upon [AnyKernel3](https://github.com/osm0sis/AnyKernel3), this repository uses GitHub Actions to automatically compile Android GKI kernels. It integrates multiple KernelSU variants and SUSFS kernel-level spoofing solutions Add practical patches such as ZRAM and BBG.
+BORE 通过 burst penalty 对任务重加权：优先调度「不那么突发」的任务，改善重负载下的响应性。默认参数（运行时可调）：
 
-- The build workflows are adapted from [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) and [Wild Kernels](https://github.com/WildKernels/GKI_KernelSU_SUSFS)
-- Flashing rule: ***It can be flashed as long as the kernel version matches.***
+| 参数（`/proc/sys/kernel/`） | 默认值 |
+|---|---|
+| `sched_burst_smoothness` | 1 |
+| `sched_burst_penalty_offset` | 24 |
+| `sched_burst_penalty_scale` | 1536 |
+| `sched_burst_cache_lifetime` | 75000000 (75ms) |
+| `sched_burst_inherit_type` | 2 |
 
-## 📦 Supported Kernel Versions
+验证生效：
+```sh
+uname -r                                  # 6.1.138-android14-11-houji-BORE-R1
+ls /proc/sys/kernel/sched_burst_*         # 5 个节点存在即生效
+grep bore /proc/kallsyms                  # effective_prio_bore / sched_init_bore 等
+```
 
-| Android | Kernel Version | Manual Workflow |
-|:---:|:---:|:---:|
-| 12 | 5.10 | `kernel-a12-5-10.yml` |
-| 13 | 5.10 | `kernel-a13-5-10.yml` |
-| 13 | 5.15 | `kernel-a13-5-15.yml` |
-| 14 | 5.15 | `kernel-a14-5-15.yml` |
-| 14 | 6.1 | `kernel-a14-6-1.yml` |
-| 15 | 6.6 | `kernel-a15-6-6.yml` |
-| 16 | 6.12 | `kernel-a16-6-12.yml` |
-| 17 | 6.18 | `kernel-a17-6-18.yml` |
-| Custom | Any | `kernel-custom.yml` |
+## SUSFS 隐藏（官方级伪装）
 
-## ✨ Features
+内核已内建 SUSFS v2.4.0，BakaSU 管理器内置 SUSFS 管理界面。伪装值取自官方 boot.img 的真实 uname，与官方 `user/release-keys` 系统逐字一致：
 
-| Feature | Description |
-|:---|:---|
-| 🔐 KernelSU Variants | Supports SukiSU / BakaSU / FinaSU variants, selectable at build time |
-| 🔀 Build Channel | Release: latest **stable** upstream Release (tag commit + same-version manager), falls back to the newest official default-branch build when the upstream only ships pre-releases; Latest: pins the default-branch HEAD and picks the newest manager build matching that version |
-| 🙈 SUSFS | Kernel-level hiding working with KSU to complete environment spoofing |
-| 💾 ZRAM LZ4 | ZRAM Compression Algorithm Patch |
-| 🛡️ BBG (Baseband Guard) | BBG patch to protect the baseband partitions from accidental wipe |
-| 🌐 Network enhancement | Optional network stack upgrade: BBRv3 backport where available (defaults to BBR v1 otherwise), full IPSet types up to 65534 sets, fq/fq_codel/cake qdisc, connmark, IPv6 NAT/masquerade, TTL/HopLimit match, WireGuard, CIFS |
-| 🔔 Re-Kernel | Optional Re-Kernel driver integration |
-| 🧷 NoMount | Optional [NoMount](https://github.com/maxsteeel/nomount) mount metamodule integration (needs the matching module flashed) |
-| ⚡ KPM | Optional KPM feature (SukiSU only, build-time patching handled by the manager) |
-| 🩹 CVE-2026-43499 | Optional automatic application of the rtmutex fix |
-| 📱 OnePlus Snapdragon 8 Elite / Gen5 Support | Optional: Add support for OnePlus Snapdragon 8 Elite / Gen5 processor |
-| 🐳 Droidspaces | Optional container support with NTSync kernel compatibility patch |
-| 🧩 Skip Incompatible | Optional: auto-skip incompatible or unusable features (except SUSFS and OnePlus 8 Elite/Gen5 support) instead of failing the build |
+```
+uname -r → 6.1.138-android14-11-g0c3d559bcd85-ab14529422
+uname -v → #1 SMP PREEMPT Wed Dec  3 02:05:30 UTC 2025
+```
 
-## 🚀 Usage
+已配置隐藏项（`ksu_susfs config list_all` 可查）：
+- `sus_path`：`/data/adb`、`/data/local/tmp`（--loop，对新进程持续生效）
+- `sus_map`：`/data/adb`
+- `hide_sus_mnts_for_non_su_procs`、`avc_log_spoofing`：开启
+- `logging`：关闭（不留日志痕迹）
 
-1. **Fork this repository** (or use it directly)
-2. Go to the **Actions** page and pick the workflow for your kernel version
-3. Click **Run workflow** and fill in the parameters as needed:
-   - `android_version` / `kernel_version` / `sub_level` / `os_patch_level`
-   - `ksu_variant`: KernelSU variant (SukiSU / BakaSU / FinaSU)
-   - `build_channel`: build channel
-     - `正式 (Release)`: manager APK taken from the latest **stable** upstream Release (`prerelease=false`) and the kernel pinned to that release tag commit, so manager and kernel versions match exactly; when the upstream only ships rc/pre-releases (e.g. BakaSU), the newest official default-branch build is used and pinned instead
-     - `最新 (HEAD)`: kernel pinned to the default-branch HEAD, and the manager is the newest build whose version matches HEAD (any branch; SukiSU / BakaSU use official CI builds, FinaSU uses the latest Release), so kernel and manager never drift apart
-     - Both channels print the selected channel, pinned commit and manager version in the logs and the run summary
-   - Feature switches: `enable_susfs`, `use_zram`, `use_bbg`, `use_net_enhance`, `use_kpm`, `skip_incompatible`, etc.
-4. Once the build finishes, download the **Artifacts** from the run page:
-   - `AnyKernel3.zip` — flashable zip (recommended; flash via custom Recovery or KSU)
-   - `boot.img` / `boot-gz.img` / `boot-lz4.img` — boot images for each compression format
+命令行工具：`/data/adb/ksu/bin/ksu_susfs`（`config restore` 可恢复默认）。
 
-> 💡 Artifacts are uploaded as Actions Artifacts by default and are not auto-published as Releases. Failed runs additionally upload build logs (`Build-Logs`) and patch conflict records (`Rejects`) for troubleshooting.
+## 刷机
 
-## 🔧 Custom Commit Configuration
+1. 下载 Release 里的 `*-AnyKernel3.zip`（标准 AnyKernel3 包）。
+2. 在第三方 Recovery（OrangeFox 等）中刷入，或刷入 **boot** 分区。
+3. **不碰 recovery / data / vbmeta**。A/B 设备注意刷当前活动槽位。
 
-The [`config/config`](config/config) file lets you pin specific commits for SUSFS and SukiSU.
+刷前务必备份当前 boot：
+```sh
+dd if=/dev/block/by-name/boot_a of=/sdcard/Download/boot_backup.img bs=1M
+```
 
-**What is a commit?**
+回退：
+```sh
+dd if=/sdcard/Download/boot_backup.img of=/dev/block/by-name/boot_a bs=1M
+```
 
-A commit is a hash string representing the state of a repository at a certain point in time. For example, setting SukiSU to `4b8644515fe6d87a109129e590ccd9d33a855dca` means the kernel will be built with the SukiSU version from January 30.
+## 构建
 
-**Why pin a commit?**
+Fork 自 LingLuo17/AnyKernel3。GitHub Actions 自动构建，入口 workflow `kernel-custom.yml`。BORE 补丁位于 `patches/bore/bore-v7.0.0.patch`，由 `build.yml` 的「集成 BORE」步骤应用并打开 `CONFIG_SCHED_BORE=y`。
 
-- Roll back to a stable version when upstream updates introduce bugs or compatibility issues
-- Manually specify a compatible version when SUSFS and SukiSU are out of sync and the build fails
+CI 触发用 `workflow_dispatch`，参数 `kernel_version=6.1 / kernelsu_variant=BakaSU / sew_stage=off`。
 
-**How to get a commit hash?**
+## 致谢
 
-- SUSFS: [susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu) (GitLab → Repository → Commits)
-- SukiSU: [SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/commits) (GitHub commit history page)
+- LingLuo17/AnyKernel3 — 构建链与 GKI 集成
+- BORE CPU Scheduler — Masahito Suzuki
+- dikafarabian/workbench — BORE android14-6.1 KABI-safe 补丁
+- afarhandanu/ZephyrKernel — GKI 6.1 调度优化组装参考
+- WildKernels — AnyKernel3 核心
 
-## 🛠️ Recommended After Installation
-### 🔧 Xposed Modules
-| Module | Description |
-|:---:|:---|
-| **FuseFixer** | [Unicode zero-width character fix module](https://github.com/5ec1cff/FuseFixer) |
-
-## 🙏 Acknowledgments
-
-- [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3)
-- [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) / [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS)
-- [SukiSU](https://sukisu.org/) / [BakaSU](https://bakasu.org/) / [FinaSU](https://github.com/LyraVoid/FinaSU)
-- [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
-
-<div align="center">
-
-## ⚠️ Disclaimer
-
-</div>
-
-- Flashing this kernel will not void your warranty, but there is always a risk of bricking your device. Please make sure to:
-- 💾 Back up your data
-- 🧠 Understand the risks before proceeding
-
-- Please make sure to back up the original boot image of this system in advance.
-
-- If flashing AnyKernel3 causes your device to enter an infinite boot loop or fail to boot, enter BootLoader and flash the original boot image back.
-
-- I take no responsibility for any issues caused by flashing this kernel.
-
-<div align="center">
-  
-# **🚨 Proceed at your own risk!**
-
-</div>
-
----
-
-<div align="center">
-
-<a id="chinese"></a>
-
-# GKI KernelSU SUSFS
-
-**自动化构建 GKI 内核 | 集成 SukiSU/BakaSU/FinaSU + SUSFS**
-
-[English](#gki-kernelsu-susfs) | **简体中文**
-
-</div>
-
-## 📖 简介
-
-本仓库基于 [AnyKernel3](https://github.com/osm0sis/AnyKernel3) 构建，通过 GitHub Actions 自动编译 **Android GKI 内核**，集成多种 KernelSU 变体与 SUSFS 内核级隐藏方案并附加 ZRAM、BBG等实用补丁。
-
-- 构建工作流修改自 [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) 与 [Wild Kernels](https://github.com/WildKernels/GKI_KernelSU_SUSFS)
-- 刷入规则：***只要内核版本匹配即可刷入***
-
-## 📦 支持的内核版本
-
-| Android | 内核版本 | 手动触发工作流 |
-|:---:|:---:|:---:|
-| 12 | 5.10 | `kernel-a12-5-10.yml` |
-| 13 | 5.10 | `kernel-a13-5-10.yml` |
-| 13 | 5.15 | `kernel-a13-5-15.yml` |
-| 14 | 5.15 | `kernel-a14-5-15.yml` |
-| 14 | 6.1 | `kernel-a14-6-1.yml` |
-| 15 | 6.6 | `kernel-a15-6-6.yml` |
-| 16 | 6.12 | `kernel-a16-6-12.yml` |
-| 17 | 6.18 | `kernel-a17-6-18.yml` |
-| 自定义 | 任意 | `kernel-custom.yml` |
-
-## ✨ 功能特性
-
-| 特性 | 说明 |
-|:---|:---|
-| 🔐 KernelSU 变体 | 支持 SukiSU / BakaSU / FinaSU 变体，构建时按需选择 |
-| 🔀 构建通道 | 正式：上游最新**正式版** Release（标签提交 + 同版本管理器），上游只有预发布版时改用官方默认分支最新上传构建；最新：锁定默认分支 HEAD，管理器取与 HEAD 版本一致的最新构建 |
-| 🙈 SUSFS | 内核级隐藏，配合 KSU 完成环境伪装 |
-| 💾 ZRAM LZ4 | ZRAM 压缩算法补丁 |
-| 🛡️ BBG 基带保护 | BBG（BaseBand Guard）补丁，保护基带分区，防止基带被意外擦除 |
-| 🌐 网络增强 | 可选网络栈增强：可用版本回移 BBRv3（无 backport 时退回 BBR v1）+ IPSet 全类型（集合上限 65534）+ fq/fq_codel/cake 队列 + connmark + IPv6 NAT/伪装 + TTL/HopLimit 匹配 + WireGuard + CIFS |
-| 🔔 Re-Kernel | 可选集成 Re-Kernel 驱动 |
-| 🧷 NoMount | 可选 [NoMount](https://github.com/maxsteeel/nomount) 挂载元模块集成（需自行刷入配套模块） |
-| ⚡ KPM | 可选开启 KPM 功能（仅 SukiSU 支持，修补由管理器侧完成） |
-| 🩹 CVE-2026-43499 | 可选自动应用 rtmutex 修复补丁 |
-| 📱 一加 骁龙8 Elite/Gen5 支持 | 可选添加一加 骁龙8 Elite/Gen5 处理器支持 |
-| 🐳 Droidspaces | 可选容器支持及 NTSync 内核兼容补丁 |
-| 🧩 兼容跳过 | 可选：功能不兼容或无法使用时自动跳过该功能（SUSFS 与 一加 骁龙8 Elite/Gen5 支持除外，二者失败仍会中断构建），不中断构建 |
-
-## 🚀 使用方法
-
-1. **Fork 本仓库**（或直接使用本仓库）
-2. 进入 **Actions** 页面，选择对应内核版本的工作流
-3. 点击 **Run workflow**，按需填写参数：
-   - `android_version` / `kernel_version` / `sub_level` / `os_patch_level`
-   - `ksu_variant`：KernelSU 变体（SukiSU / BakaSU / FinaSU）
-   - `build_channel`：构建通道
-     - `正式 (Release)`：使用上游最新**正式版** Release（`prerelease=false`）的管理器 APK，内核检出该 Release 标签的同一提交，版本严格一致；上游只有 rc/预发布版时（如 BakaSU），改用官方默认分支最新上传构建并锁定该提交
-     - `最新 (HEAD)`：内核锁定默认分支 HEAD，管理器取与 HEAD 版本号一致的最新构建（不限分支，SukiSU / BakaSU 用官方 CI 构建，FinaSU 用最新 Release），避免内核与管理器版本错位
-     - 两个通道的日志与运行摘要（Summary）都会打印实际选用的通道、提交与管理器版本
-   - 功能开关：`enable_susfs`、`use_zram`、`use_bbg`、`use_net_enhance`、`use_kpm`、`skip_incompatible` 等 
-4. 构建完成后，在本次运行页面下载 **Artifacts**：
-   - `AnyKernel3.zip` —— 卡刷包（推荐，配合自定义 Recovery 或 KSU 刷入）
-   - `boot.img` / `boot-gz.img` / `boot-lz4.img` —— 每种压缩格式的 boot 镜像
-
-> 💡 产物默认上传为 Actions Artifacts，不自动发布 Release；失败时会额外上传构建日志（`Build-Logs`）与补丁冲突记录（`Rejects`）供排查。
-
-## 🔧 自定义提交配置
-
-通过 [`config/config`](config/config) 文件可以指定 SUSFS 和 SukiSU 使用特定的 commit。
-
-**什么是提交 (commit)？**
-
-提交是一串哈希字符串，代表仓库在某个时间点的状态。例如将 SukiSU 设为 `4b8644515fe6d87a109129e590ccd9d33a855dca`，即使用 1 月 30 日的 SukiSU 版本编译内核。
-
-**为什么要指定提交？**
-
-- 当上游仓库更新引入 bug 或兼容性问题时，可回退到稳定版本
-- 当 SUSFS 与 SukiSU 版本不同步导致编译失败时，可手动指定兼容的版本
-
-**如何获取提交哈希？**
-
-- SUSFS：[susfs4ksu](https://gitlab.com/simonpunk/susfs4ksu)（GitLab → Repository → Commits）
-- SukiSU：[SukiSU-Ultra](https://github.com/SukiSU-Ultra/SukiSU-Ultra/commits)（GitHub 提交历史页面）
-
-## 🛠️ 安装后推荐
-### 🔧 Xposed 模块
-
-| 模块 | 说明 |
-|:---:|:---|
-| **FuseFixer** | [Unicode零宽修复模块](https://github.com/5ec1cff/FuseFixer) |
-
-## 🙏 致谢
-
-- [osm0sis/AnyKernel3](https://github.com/osm0sis/AnyKernel3)
-- [zzh20188/GKI_KernelSU_SUSFS](https://github.com/zzh20188/GKI_KernelSU_SUSFS) / [WildKernels/GKI_KernelSU_SUSFS](https://github.com/WildKernels/GKI_KernelSU_SUSFS)
-- [SukiSU](https://sukisu.org/) / [BakaSU](https://bakasu.org/) / [FinaSU](https://github.com/LyraVoid/FinaSU)
-- [SUSFS](https://gitlab.com/simonpunk/susfs4ksu)
-
-<div align="center">
-
-## ⚠️ 免责声明
-
-</div>
-
-- 刷入内核不会使保修失效，但总有设备变砖的风险请务必:
-- 💾 备份你的数据
-- 🧠 在继续之前，了解风险
-
-- 请务必提前备份该系统的原Boot镜像。
-
-- 如果刷入 AnyKernel3 导致设备进入无限启动循环或无法启动，请进入 BootLoader 并重新刷入原Boot镜像。
-
-- 我不对刷写该内核所引发的任何问题负责。
-
-<div align="center">
-  
-# **🚨  请自行承担风险！**
-
-</div>
+> 本内核为个人学习与折腾产物，按「现状」提供，刷机有风险，请自行备份。
