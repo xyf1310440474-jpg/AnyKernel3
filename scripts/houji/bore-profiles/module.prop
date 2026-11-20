@@ -1,0 +1,6 @@
+id=bore_profiles
+name=BORE 调度场景预设
+version=v1.0
+versionCode=1
+author=xyf1310440474-jpg
+description=开机应用 BORE 调度预设(battery/balance/gaming)。改 /data/adb/bore_profile 后重启，或 root 下运行 bore-profile.sh 即时切换。

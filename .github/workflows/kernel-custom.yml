@@ -347,6 +347,11 @@ on:
           - "仅上传 AnyKernel3.zip"
           - "上传全部"
         default: "仅上传 AnyKernel3.zip"
+      publish_release:
+        description: "构建成功后自动创建 Release 并附上刷机包与 SHA256"
+        required: false
+        type: boolean
+        default: true
       ksu_mode:
         description: "KernelSU / SUSFS 模式"
         required: true
@@ -605,3 +610,81 @@ jobs:
       artifact_upload_mode: ${{ inputs.artifact_upload_mode }}
       version: ${{ inputs.version || '' }}
       build_time: ${{ inputs.build_time || '' }}
+
+  # 构建成功后自动创建/更新 Release，附上 AK3 刷机包与 SHA256 校验文件。
+  # 解决「release 正文写了 SHA 但 assets 为空」——产物此前只上传到 Actions artifact。
+  publish-release:
+    name: "发布 Release（含刷机包 + SHA256）"
+    needs: [resolve-version, build-custom-kernel]
+    if: ${{ inputs.publish_release && needs.build-custom-kernel.result == 'success' }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+    steps:
+      - name: 下载构建产物
+        uses: actions/download-artifact@v4
+        with:
+          path: artifacts/
+
+      - name: 汇总刷机包并计算 SHA256
+        id: prep
+        run: |
+          set -euo pipefail
+          mkdir -p release-assets
+          # 从所有 artifact 里挑出 AK3 zip / img 刷机包（排除日志与 rejects）
+          { find artifacts/ -type f \( -name '*AnyKernel3.zip' -o -name '*.img' \) \
+            | grep -viE 'log|reject'; } > /tmp/candidates.txt || true
+          n=0
+          while IFS= read -r f; do
+            [ -z "$f" ] && continue
+            cp "$f" release-assets/
+            n=$((n+1))
+          done < /tmp/candidates.txt
+          if [ "$n" -eq 0 ]; then
+            echo "::error::未找到 AnyKernel3.zip / .img 产物，终止发布"
+            exit 1
+          fi
+          cd release-assets
+          sha256sum * > SHA256SUMS.txt
+          echo "count=$n" >> "$GITHUB_OUTPUT"
+          echo "--- SHA256SUMS.txt ---"
+          cat SHA256SUMS.txt
+
+      - name: 生成 Release 说明
+        id: notes
+        env:
+          KERNEL_FULL: ${{ needs.resolve-version.outputs.kernel_full }}
+          ANDROID_VER: ${{ needs.resolve-version.outputs.android_version }}
+          PATCH_LVL: ${{ needs.resolve-version.outputs.os_patch_level }}
+        run: |
+          {
+            echo "## houji-bore-kernel 自动构建"
+            echo ""
+            echo "- 内核基线：Linux ${KERNEL_FULL}（KMI android14-11）"
+            echo "- Android：${ANDROID_VER}，安全补丁级别 ${PATCH_LVL}"
+            echo "- 变体：${{ inputs.kernelsu_variant }} / SUSFS 模式 ${{ inputs.ksu_mode }}"
+            echo "- BORE v7.0.0 调度器 + clang LTO"
+            echo ""
+            echo "### 校验"
+            echo "下载后请先核对 SHA256："
+            echo '```'
+            cat release-assets/SHA256SUMS.txt
+            echo '```'
+            echo ""
+            echo "### 刷入"
+            echo "第三方 Recovery 刷 **boot** 分区；A/B 设备注意活动槽位。**不碰 recovery/data/vbmeta**。"
+            echo "官方伪装 uname 由 BakaSU 内置 SUSFS 管理器下发（持久化配置，见 README SUSFS 章节）。"
+          } > release-notes.md
+          echo "tag=auto-${ANDROID_VER}-${KERNEL_FULL}-${PATCH_LVL}-${{ github.run_number }}" >> "$GITHUB_OUTPUT"
+
+      - name: 创建 Release 并上传产物
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ steps.notes.outputs.tag }}
+          name: ${{ needs.resolve-version.outputs.kernel_full }}-${{ needs.resolve-version.outputs.android_version }}-${{ needs.resolve-version.outputs.os_patch_level }}
+          body_path: release-notes.md
+          files: release-assets/*
+          fail_on_unmatched_files: true
+          generate_release_notes: false
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
